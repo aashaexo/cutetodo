@@ -240,6 +240,49 @@
     }
     #clear-btn:hover { background: rgba(255,255,255,0.1); }
 
+    /* Text labels */
+    .text-label {
+      position: absolute;
+      font-family: 'Caveat', cursive;
+      font-size: 32px;
+      font-weight: 700;
+      color: var(--marker-color);
+      background: none;
+      border: none;
+      outline: none;
+      white-space: pre;
+      cursor: grab;
+      pointer-events: auto;
+      min-width: 20px;
+      line-height: 1.2;
+    }
+
+    .text-label:active { cursor: grabbing; }
+
+    .text-label:focus {
+      cursor: text;
+      border-bottom: 2px dashed var(--marker-color);
+    }
+
+    .text-label .delete-btn {
+      position: absolute;
+      top: -10px; right: -10px;
+      width: 22px; height: 22px;
+      background: #e74c3c;
+      color: #fff;
+      border: none;
+      border-radius: 50%;
+      font-size: 12px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      z-index: 10;
+    }
+
+    .text-label:hover .delete-btn { display: flex; }
+
     /* Eraser cursor */
     .eraser-cursor {
       cursor: crosshair;
@@ -257,6 +300,11 @@
     <button class="tool-btn active" data-tool="card" id="card-btn">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/></svg>
       Card
+    </button>
+    <span class="separator"></span>
+    <button class="tool-btn" data-tool="text" id="text-btn">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3"/><path d="M12 4v16"/><path d="M8 20h8"/></svg>
+      Text
     </button>
     <span class="separator"></span>
     <button class="tool-btn" data-tool="marker" id="marker-btn">
@@ -285,6 +333,8 @@
     let currentTool = 'card';
     let currentTheme = 'light';
     let cards = [];
+    let textLabels = []; // array of {id, x, y, text, color}
+    let textIdCounter = 0;
     let drawPaths = []; // array of {points, color, width}
     let isDrawing = false;
     let currentPath = null;
@@ -384,6 +434,11 @@
         currentTool = btn.dataset.tool;
         drawCanvas.className = currentTool === 'eraser' ? 'eraser-cursor' : '';
         drawCanvas.style.pointerEvents = (currentTool === 'marker' || currentTool === 'eraser') ? 'auto' : 'none';
+        cardsLayer.style.pointerEvents = (currentTool === 'card' || currentTool === 'text') ? 'none' : 'none';
+        // For text tool, we also need labels to be interactive
+        document.querySelectorAll('.text-label').forEach(el => {
+          el.style.pointerEvents = (currentTool === 'text' || currentTool === 'eraser') ? 'auto' : 'none';
+        });
       });
     });
 
@@ -463,6 +518,20 @@
       if (toRemove.length) {
         cards = cards.filter(c => !toRemove.includes(c.id));
         renderCards();
+        saveState();
+      }
+
+      // Erase text labels
+      const textsToRemove = [];
+      document.querySelectorAll('.text-label').forEach(label => {
+        const rect = label.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+          textsToRemove.push(label.dataset.id);
+        }
+      });
+      if (textsToRemove.length) {
+        textLabels = textLabels.filter(t => !textsToRemove.includes(t.id));
+        renderTextLabels();
         saveState();
       }
     }
@@ -582,7 +651,82 @@
       return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     }
 
-    // Mouse for drag & card placement
+    // ── Text Labels ──
+    let dragLabel = null;
+
+    function createTextLabel(x, y) {
+      const id = 'text-' + (++textIdCounter);
+      const t = themes[currentTheme];
+      const label = { id, x, y, text: '', color: t.marker };
+      textLabels.push(label);
+      renderTextLabels();
+      saveState();
+      setTimeout(() => {
+        const el = document.querySelector(`[data-id="${id}"] .text-input`);
+        if (el) el.focus();
+      }, 50);
+    }
+
+    function renderTextLabels() {
+      // Remove old text labels
+      document.querySelectorAll('.text-label').forEach(el => el.remove());
+
+      for (const label of textLabels) {
+        const el = document.createElement('div');
+        el.className = 'text-label';
+        el.dataset.id = label.id;
+        el.style.left = label.x + 'px';
+        el.style.top = label.y + 'px';
+        el.style.color = label.color;
+
+        const del = document.createElement('button');
+        del.className = 'delete-btn';
+        del.textContent = '×';
+        del.addEventListener('click', (e) => {
+          e.stopPropagation();
+          textLabels = textLabels.filter(t => t.id !== label.id);
+          renderTextLabels();
+          saveState();
+        });
+
+        const input = document.createElement('span');
+        input.className = 'text-input';
+        input.contentEditable = true;
+        input.style.outline = 'none';
+        input.style.minWidth = '20px';
+        input.style.display = 'inline-block';
+        input.textContent = label.text || '';
+        if (!label.text) input.setAttribute('data-placeholder', 'Type...');
+        input.addEventListener('input', () => {
+          label.text = input.textContent;
+          saveState();
+        });
+        input.addEventListener('focus', () => {
+          input.removeAttribute('data-placeholder');
+        });
+        input.addEventListener('blur', () => {
+          if (!label.text) input.setAttribute('data-placeholder', 'Type...');
+          saveState();
+        });
+
+        el.appendChild(del);
+        el.appendChild(input);
+
+        // Drag
+        el.addEventListener('mousedown', (e) => {
+          if (e.target.classList.contains('delete-btn')) return;
+          if (e.target.classList.contains('text-input') && document.activeElement === e.target) return;
+          dragLabel = label;
+          dragOffset.x = e.clientX - label.x;
+          dragOffset.y = e.clientY - label.y;
+          e.preventDefault();
+        });
+
+        cardsLayer.appendChild(el);
+      }
+    }
+
+    // Mouse for drag & card/label placement
     document.addEventListener('mousemove', (e) => {
       if (dragCard) {
         dragCard.x = e.clientX - dragOffset.x;
@@ -593,6 +737,15 @@
           el.style.top = dragCard.y + 'px';
         }
       }
+      if (dragLabel) {
+        dragLabel.x = e.clientX - dragOffset.x;
+        dragLabel.y = e.clientY - dragOffset.y;
+        const el = document.querySelector(`[data-id="${dragLabel.id}"]`);
+        if (el) {
+          el.style.left = dragLabel.x + 'px';
+          el.style.top = dragLabel.y + 'px';
+        }
+      }
     });
 
     document.addEventListener('mouseup', () => {
@@ -600,17 +753,19 @@
         saveState();
         dragCard = null;
       }
-    });
-
-    // Click on canvas to add card
-    document.getElementById('app').addEventListener('dblclick', (e) => {
-      if (currentTool === 'card' && e.target === gridCanvas) {
-        createCard(e.clientX, e.clientY, '');
+      if (dragLabel) {
+        saveState();
+        dragLabel = null;
       }
     });
+
+    // Click on canvas to add card or text
     document.getElementById('app').addEventListener('click', (e) => {
-      if (currentTool === 'card' && (e.target === gridCanvas || e.target === drawCanvas)) {
+      if (e.target !== gridCanvas && e.target !== drawCanvas) return;
+      if (currentTool === 'card') {
         createCard(e.clientX, e.clientY, '');
+      } else if (currentTool === 'text') {
+        createTextLabel(e.clientX, e.clientY);
       }
     });
 
@@ -618,9 +773,12 @@
     document.getElementById('clear-btn').addEventListener('click', () => {
       if (confirm('Clear everything?')) {
         cards = [];
+        textLabels = [];
         drawPaths = [];
         cardIdCounter = 0;
+        textIdCounter = 0;
         renderCards();
+        renderTextLabels();
         redrawPaths();
         saveState();
       }
@@ -629,7 +787,7 @@
     // ── Persistence ──
     function saveState() {
       localStorage.setItem('cutetodo', JSON.stringify({
-        cards, drawPaths, cardIdCounter, currentTheme
+        cards, drawPaths, cardIdCounter, textLabels, textIdCounter, currentTheme
       }));
     }
 
@@ -638,6 +796,8 @@
         const data = JSON.parse(localStorage.getItem('cutetodo'));
         if (data) {
           cards = data.cards || [];
+          textLabels = data.textLabels || [];
+          textIdCounter = data.textIdCounter || 0;
           drawPaths = data.drawPaths || [];
           cardIdCounter = data.cardIdCounter || 0;
           if (data.currentTheme) {
@@ -655,14 +815,16 @@
     document.addEventListener('keydown', (e) => {
       if (document.activeElement && document.activeElement.contentEditable === 'true') return;
       if (e.key === '1') document.getElementById('card-btn').click();
-      if (e.key === '2') document.getElementById('marker-btn').click();
-      if (e.key === '3') document.getElementById('eraser-btn').click();
+      if (e.key === '2') document.getElementById('text-btn').click();
+      if (e.key === '3') document.getElementById('marker-btn').click();
+      if (e.key === '4') document.getElementById('eraser-btn').click();
     });
 
     // ── Init ──
     loadState();
     resize();
     renderCards();
+    renderTextLabels();
   </script>
 </body>
 </html>
